@@ -1,14 +1,7 @@
 #!/bin/bash
-# рабочий вариант скрипта
-# конвертируем смс и отправляем на почтовый ящик
-# и в файл в sent
-# первая часть процедуры
-# выделяем строики кто, когда, сообщение, преобразуем русский, пишем в файл
 status="$1"
-#  Может при­ни­мать зна­че­ния «CALL, RECEIVED, USSD, SENT, FAILED, REPORT»
 file="$2"
 # имя файла будет /var/spool/sms/incoming/GSM1.0eu5Pv"
-# flnm=${file:24}
 flnm=${file: -11}
 
 case "$1" in
@@ -23,25 +16,13 @@ case "$1" in
         else
                 message=`tail -n +14 $file`
     fi
-        # отправка на почту почему то не работает пока отключу здесь
-        # echo -e "$message" | mail -s "Incoming SMS from +$from" in@vivaluks.ru
-        # перекладываем сюда с преобразованной кодировкой сообщения, понадобится для отправки об неверном вводе данных
-        # и для получения показаний (заносится в переменную trfile)
-        # лучше не использовать sent
-        # echo -e "$header\n$message\n" > /var/spool/sms/sent/$flnm
         echo -e "$header\n$message\n" > /var/spool/sms/conv/$flnm
 # паралельно все пишем в лог
         echo -e "$header\n$message\n" >> /var/log/smsd/sms.log
-# второй этап процесса
 # проверяем корректность принятого смс
-# обрабатываем уже преобразованный файл
-# лучше не использовать sent
-# trfile="/var/spool/sms/sent/$flnm"
 trfile="/var/spool/sms/conv/$flnm"
 if ! ( grep -i "^лс:" $trfile > /dev/null && grep -i "^эл:" $trfile > /dev/null )
     then
-    # сначала кладем во времменый каталог для преобразования
-    # echo -e "To: $from\n\nНеправильный формат СМС!\nПисать:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" > /var/spool/sms/outgoing/send_er.sms
     echo -e "Неправильный формат СМС!\nПисать:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" > /var/spool/sms/conv/err_mess.sms
     echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/send_er.sms
     iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/err_mess.sms >> /var/spool/sms/conv/send_er.sms
@@ -53,7 +34,6 @@ fi
   ele=`head $trfile | grep -i "эл:"`
   hov=""
   gov=""
-  # исправить хв и гв, было неправильно в файле
   if grep -i "хв:" $trfile > /dev/null ; then
     hov=`head $trfile | grep -i "^хв:"`
   fi
@@ -61,13 +41,9 @@ fi
     gov=`head $trfile | grep -i "^гв:"`
   fi
 
-  # а теперь надо записать в файлы и положить их в outgoing для ок ответа и в tomail для отправки эл.почтой
-  # имена файлов для отправки ответа клиенту и на почту или ftp для учета данных
+  # записать в файлы и положить их в outgoing для ок ответа и в tomail 
+  # для отправки ответа клиенту и на почту и ftp для учета данных
 
-  #fileans=${flnm/GSM1/send/GSM1}
-  #filetomail=${flnm/GSM1/tomail/GSM1}
-
-  # str_out= echo -e "To: $from\n\nОт вас приняты показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/outgoing/$flnm
   echo -e "От вас приняты показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/conv/mes$flnm
   echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/$flnm
   iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/mes$flnm >> /var/spool/sms/conv/$flnm
