@@ -1,13 +1,20 @@
 #!/bin/bash
+# рабочий вариант скрипта
+# конвертируем смс и отправляем на почтовый ящик
+# и в файл в sent
+# первая часть процедуры
+# выделяем строики кто, когда, сообщение, преобразуем русский, пишем в файл
 status="$1"
+#  Может при­ни­мать зна­че­ния «CALL, RECEIVED, USSD, SENT, FAILED, REPORT»
 file="$2"
-# имя файла
-flnm=${file:24}
+# имя файла будет /var/spool/sms/incoming/GSM1.0eu5Pv"
+# flnm=${file:24}
+flnm=${file: -11}
 
 case "$1" in
   RECEIVED)
     FILE=`mktemp /tmp/smsd_XXXXXX`
-    # заголовок, телефон
+
     header=`head -13 $file | grep -e "^From: " -e "^Sent: " -e "^Received: "`
     from=`head -13 $file | grep -e "^From: " | awk '{print $2}'`
 
@@ -15,51 +22,74 @@ case "$1" in
                 message=`tail -n +14 $file | iconv -f UCS-2BE -t UTF-8`
         else
                 message=`tail -n +14 $file`
-        fi
+    fi
+        # отправка на почту почему то не работает пока отключу здесь
+        # echo -e "$message" | mail -s "Incoming SMS from +$from" in@vivaluks.ru
         # перекладываем сюда с преобразованной кодировкой сообщения, понадобится для отправки об неверном вводе данных
         # и для получения показаний (заносится в переменную trfile)
+        # лучше не использовать sent
+        # echo -e "$header\n$message\n" > /var/spool/sms/sent/$flnm
         echo -e "$header\n$message\n" > /var/spool/sms/conv/$flnm
-        # паралельно все пишем в лог
+# паралельно все пишем в лог
         echo -e "$header\n$message\n" >> /var/log/smsd/sms.log
+# второй этап процесса
+# проверяем корректность принятого смс
+# обрабатываем уже преобразованный файл
+# лучше не использовать sent
+# trfile="/var/spool/sms/sent/$flnm"
+trfile="/var/spool/sms/conv/$flnm"
+if ! ( grep -i "^лс:" $trfile > /dev/null && grep -i "^эл:" $trfile > /dev/null )
+    then
+    # сначала кладем во времменый каталог для преобразования
+    # echo -e "To: $from\n\nНеправильный формат СМС!\nПисать:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" > /var/spool/sms/outgoing/send_er.sms
+    echo -e "Неправильный формат СМС!\nПисать:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" > /var/spool/sms/conv/err_mess.sms
+    echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/send_er.sms
+    iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/err_mess.sms >> /var/spool/sms/conv/send_er.sms
+    mv /var/spool/sms/conv/send_er.sms /var/spool/sms/outgoing/
+    # при фуфле в смс выходим
+    exit 0
+fi
+  lsch=`head $trfile | grep -i "^лс:"`
+  ele=`head $trfile | grep -i "эл:"`
+  hov=""
+  gov=""
+  # исправить хв и гв, было неправильно в файле
+  if grep -i "хв:" $trfile > /dev/null ; then
+    hov=`head $trfile | grep -i "^хв:"`
+  fi
+  if grep -i "гв:" $trfile > /dev/null ; then
+    gov=`head $trfile | grep -i "^гв:"`
+  fi
+
+  # а теперь надо записать в файлы и положить их в outgoing для ок ответа и в tomail для отправки эл.почтой
+  # имена файлов для отправки ответа клиенту и на почту или ftp для учета данных
+
+  #fileans=${flnm/GSM1/send/GSM1}
+  #filetomail=${flnm/GSM1/tomail/GSM1}
+
+  # str_out= echo -e "To: $from\n\nОт вас приняты показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/outgoing/$flnm
+  echo -e "От вас приняты показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/conv/mes$flnm
+  echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/$flnm
+  iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/mes$flnm >> /var/spool/sms/conv/$flnm
+  mv /var/spool/sms/conv/$flnm /var/spool/sms/outgoing/
+  echo "$lsch;$ele;$hov;$gov;Телефон:+$from" > /home/constantin/sms/tomail/$flnm
+  rm /var/spool/sms/conv/mes$flnm
+  # отправка на почту почему то не работает 
+  message="$lsch;$ele;$hov;$gov;Телефон:+$from"
+  # и здесь отправка дубля показаний на эл.почту
+  echo -e "$message" | mail -s -r ck@onlight.pro "Incoming SMS from +$from" in@vivaluks.ru
+  # на фтп не вкуриваются пути, только имя файла
+  cd /home/constantin/sms/tomail
+  ftp -in -u ftp://user:passQ@ftp-srv.ru/uploads/ $flnm
     ;;
+  USSD)
+    # сигнализировать про снижение баланса
+    cp /var/spool/sms/incoming/$file /home/constantin/sms/
+    ;;  
   *)
     echo "$*" >>/var/log/smsd/others.log
-;;
+    ;;
 esac
 
-# проверяем корректность принятого смс
-trfile="/var/spool/sms/conv/$flnm"
-if !((grep -i "^лс:" $trfile > /dev/null) && (grep -i "^эл:" $trfile > /dev/null))
-then
-    # преобразовываем и отправляем сообщение о неверном вводе
-    echo -e "Неправильный формат СМС!\nПисать:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" > /var/spool/sms/conv/send_er.sms
-    echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/outgoing/send_er.sms
-    iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/send_er.sms >> /var/spool/sms/outgoing/send_er.sms
-    # при фуфле в смс выходим
-    exit
-fi
-
-lsch=`head $trfile | grep -i "^лс:"`
-ele=`head $trfile | grep -i "эл:"`
-hov=""
-gov=""
-
-if grep -i "хв:" $trfile > /dev/null ; then
-  hov=`head $trfile | grep -i "^хв:"`
-fi
-if grep -i "гв:" $trfile > /dev/null ; then
-  gov=`head $trfile | grep -i "^гв:"`
-fi
-
-# записываем в файлы в outgoing для ок ответа и в tomail для отправки эл.почтой и на фтп
-echo -e "От вас приняты показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/conv/$flnm
-echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/outgoing/$flnm
-iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/$flnm >> /var/spool/sms/outgoing/$flnm
-echo "$lsch;$ele;$hov;$gov;Телефон:+$from" > /home/constantin/sms/tomail/$flnm
-message="$lsch;$ele;$hov;$gov;Телефон:+$from"
-echo -e "$message" | mail -s -r info@onlight.pro "Incoming SMS from +$from" in@vivaluks.ru
-# на фтп не вкуриваются пути, только имя файла
-cd /home/constantin/sms/tomail
-ftp -in -u ftp://user:passQ@ftp-srv.ru/uploads/ $flnm
 
 
