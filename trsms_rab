@@ -1,0 +1,148 @@
+#!/bin/bash
+# рабочий вариант скрипта
+# конвертируем смс и отправляем на почтовый ящик
+# и в файл в sent
+# конфигурация в файле /etc/smsd.conf
+# запуск sudo smsd, остановка sudo pkill smsd
+# расположение евентхандлера /usr/local/sbin/
+# подключаем внешние функции
+# кстати их тоже можно зафигачить в усер-локал-сбин, чтоб никто не залез при работе на чужой системе
+# и вообще все рабочие вещи скинуть туда
+source "/home/constantin/sms/functions"
+# первая часть процедуры
+# выделяем строики кто, когда, сообщение, преобразуем русский, пишем в файл
+status="$1"
+#  Может при­ни­мать зна­че­ния «CALL, RECEIVED, USSD, SENT, FAILED, REPORT»
+file="$2"
+# имя файла будет /var/spool/sms/incoming/GSM1.0eu5Pv"
+# flnm=${file:24}
+flnm=${file: -11}
+
+case "$1" in
+  RECEIVED)
+    FILE=`mktemp /tmp/smsd_XXXXXX`
+
+    header=`head -13 $file | grep -e "^From: " -e "^Sent: " -e "^Received: "`
+    from=`head -13 $file | grep -e "^From: " | awk '{print $2}'`
+
+    if grep "Alphabet: UCS2" $file > /dev/null ; then
+                message=`tail -n +14 $file | iconv -f UCS-2BE -t UTF-8`
+        else
+                message=`tail -n +14 $file`
+    fi
+        # отправка на почту почему то не работает пока отключу здесь
+        # echo -e "$message" | mail -s "Incoming SMS from +$from" in@vivaluks.ru
+        # перекладываем сюда с преобразованной кодировкой сообщения, понадобится для отправки об неверном вводе данных
+        # и для получения показаний (заносится в переменную trfile)
+        # лучше не использовать sent
+        # echo -e "$header\n$message\n" > /var/spool/sms/sent/$flnm
+        echo -e "$header\n$message\n" > /var/spool/sms/conv/$flnm
+# паралельно все пишем в лог
+        echo -e "$header\n$message\n" >> /var/log/smsd/sms.log
+# второй этап процесса
+# проверяем корректность принятого смс
+# обрабатываем уже преобразованный файл
+# лучше не использовать sent
+# trfile="/var/spool/sms/sent/$flnm"
+trfile="/var/spool/sms/conv/$flnm"
+if ! ( grep -i "^лс:" $trfile > /dev/null && grep -i "^эл:" $trfile > /dev/null )
+    then
+    # используем функцию, но пока отладка - оставил как есть
+    # сначала кладем во времменый каталог для преобразования
+    # исользуем функцию
+
+    send_error "Неверный формат СМС!\nВерный шаблон сообщения:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" $from
+
+    #echo -e "Неправильный формат СМС!\nВерный шаблон сообщения:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" > /var/spool/sms/conv/err_mess.sms
+    #echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/send_er.sms
+    #iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/err_mess.sms >> /var/spool/sms/conv/send_er.sms
+    #mv /var/spool/sms/conv/send_er.sms /var/spool/sms/outgoing/
+    # при фуфле в смс выходим
+    exit 0
+fi
+  # при получении значений сделать их оллтрим
+  # проверить наличие цифр в строке
+  lsch=`head $trfile | grep -i "^лс:"`
+  ele=`head $trfile | grep -i "эл:"`
+  hov=""
+  gov=""
+  # далее по просьбе заказчика идут показатели еще 3 пар счетчиков.. но тогда нужно писать серийные номера каждого, 
+  # чтобы была возможность их индентифицировать 
+  # исправить хв и гв, было неправильно в файле
+  if grep -i "хв:" $trfile > /dev/null ; then
+    hov=`head $trfile | grep -i "^хв:"`
+  fi
+  if grep -i "гв:" $trfile > /dev/null ; then
+    gov=`head $trfile | grep -i "^гв:"`
+  fi
+
+  # а теперь надо записать в файлы и положить их в outgoing для ок ответа и в tomail для отправки эл.почтой
+  # имена файлов для отправки ответа клиенту и на почту или ftp для учета данных
+
+  #fileans=${flnm/GSM1/send/GSM1}
+  #filetomail=${flnm/GSM1/tomail/GSM1}
+
+  # str_out= echo -e "To: $from\n\nОт вас приняты показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/outgoing/$flnm
+  
+  # запускаем функцию проверки-записи в бд
+  # если нет добавляем, если есть проверяем чтобы показания были не меньше учтеных
+  # если меньше шлем смс об ошибочных данных
+  # получаем значения показаний
+  lc=`echo "$lsch" | formail -zx ЛС:`
+  el=`echo "$ele" | formail -zx ЭЛ:`
+  ho=`echo "$hov" | formail -zx ХВ:`
+  go=`echo "$gov" | formail -zx ГВ:`
+  fr=$from
+  
+  # отправляем их в функцию параметрами
+  # пока отключил. с базой разбираюсь
+  exch_bd $lc $el $ho $go $fr
+  #
+  
+  echo -e "От вас поступили показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/conv/mes$flnm
+  echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/$flnm
+  iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/mes$flnm >> /var/spool/sms/conv/$flnm
+  mv /var/spool/sms/conv/$flnm /var/spool/sms/outgoing/
+  echo "$lsch;$ele;$hov;$gov;Телефон:+$from" > /home/constantin/sms/tomail/$flnm
+  rm /var/spool/sms/conv/mes$flnm
+# разрешаем всем читать смс
+  chmod a+r /home/constantin/sms/tomail/$flnm
+  # отправка на почту почему то не работает 
+  message="$lsch;$ele;$hov;$gov;Телефон:+$from"
+  # и здесь отправка дубля показаний на эл.почту, пока отключил
+  # echo -e "$message" | mail -s -r ck@onlight.pro "Incoming SMS from +$from" in@vivaluks.ru
+  # отправка в лог
+  echo -e "$(date)\n$message\n" >> /var/log/smsd/sms_snt.log
+    # на фтп не вкуриваются пути, только имя файла
+  cd /home/constantin/sms/tomail
+  ftp -in -u ftp://j880085_wp3:shE6Wctw58Q@159dz.spectrum.myjino.ru/site/getpu/inSMS/ $flnm
+  #ftp -in -u ftp://j880085_wp3:shE6Wctw58Q@159dz.spectrum.myjino.ru/site/getpu/inSMS/ $flnm
+    ;;
+  USSD)
+    # сигнализировать про снижение баланса
+    # скидывать сообщения о балансе в каталог контроля смс о балансе
+    cp /var/spool/sms/incoming/$file /home/constantin/sms/ussd/
+    # или принудительно проверять баланс, например раз в неделю
+    # в секции модема указать регулярную команду     
+    # [mobile]
+    # regular_run_cmd = AT+CUSD=1,"*100#",15;
+    # regular_run_interval = 604800
+    ;;  
+  CALL) 
+    # реагируем на звонок
+    # пока убрал. см. файл на звонок
+    send_error "Номер принимает только СМС." $from
+    # echo "Звонок!"
+    #FILE=`mktemp /tmp/send_XXXXXX`
+    #FILE1=`mktemp /tmp/send_XXXXXX`
+    #echo -e "To: $from\nAlphabet: UCS2\n" > $FILE
+    #echo "Номер принимает только СМС." > $FILE1
+    #iconv -f UTF-8 -t UCS-2BE $FILE1  >> $FILE
+    #FILE2=`mktemp /var/spool/sms/outgoing/send_XXXXXX`
+    #mv $FILE $FILE2    
+  ;;
+  *)
+    echo "$*" >>/var/log/smsd/others.log
+    ;;
+esac
+

@@ -1,0 +1,199 @@
+# подключаемые функции 
+# база 
+# getpu.acc_indication
+# поля
+# nom l_chet n_elec elec n_hv1 hv1 n_gv1 gv1 n_hv2 hv2 n_gv2 gv2 n_hv3 hv3 n_gv3 gv3 n_hv4 hv4 n_gv4 gv4 phone email
+
+# описываем соединение с сервером MySQL, и принимаем первым аргументом нужные команды
+connect () {
+mysql -D getpu -u sms_acc -p1313 -Bse "$1"
+}
+
+# формирование правильного файла хмл 
+mak_gud_xml() {
+	# правим хмл файл
+	# сначала меняем русский 
+	#sed -e 's/<Раздел/<razdel/g' short > short1
+	sed -e 's/<Раздел/<razdel/g' 08_IPK.xml > short1
+	sed -e 's/<\/Раздел/<\/razdel/g' short1 > short2
+	sed -e 's/<Строка/<string/g' short2 > short1
+	sed -e 's/<\/Строка/<\/string/g' short1 > short0
+	# теперь правим разделы
+	# множественные строки данных включены в раздел 2, а все вместе в раздел 1
+	# т.о. мы и адрес пропишем в таблицу показаний для идентификации по объекту недвижимости
+	sed -e 's/<\/razdel2>//g' short0 > short1
+	sed -e 's/<razdel3>//g' short1 > short2
+	sed -e 's/<\/razdel3>//g' short2 > short1
+	sed -e 's/<razdel4>//g' short1 > short2
+	sed -e 's/<\/razdel1>//g' short2 > short1
+	sed -e 's/<razdel2>/<razdel4>/g' short1 > short2
+	sed -e 's/<razdel5\/>/<\/razdel1>/g' short2 > all_ipk.xml
+	cp all_ipk.xml /var/lib/mysql-files/
+}
+
+# загрузка хмл в базу данных
+fill_base () {
+	connect "LOAD XML INFILE '/var/lib/mysql-files/all_ipk.xml' INTO TABLE person ROWS IDENTIFIED BY '<razdel1>';"
+	connect "LOAD XML INFILE '/var/lib/mysql-files/all_ipk.xml' INTO TABLE money ROWS IDENTIFIED BY '<razdel4>';"
+	connect "LOAD XML INFILE '/var/lib/mysql-files/all_ipk.xml' INTO TABLE data_indic ROWS IDENTIFIED BY '<string>';"
+}
+
+# основная функция обработки
+# передаются параметрами: $lsch $ele $hov $gov $from
+
+exch_bd(){
+# получаем из строк только значения показаний
+local lc=$1
+local el_new=$2
+local hv_new=$3
+local gv_new=$4
+# с телефоном не определился.. отслеживать или нет соответствие
+local fr=$5
+# проверка принятых показаний
+# echo "data: $lc $el $ho $go" 
+	# сначала проверяем сколько у чела квартир, если больше одной - футболим
+	moreone=$(connect "select count(*) from person where person.КодЛицевогоСчета like '$lc'") ; 
+	if [[ $moreone>1 ]]; then
+		send_error "Невозможно принять показания.\nОбратитесь в офис УК." $fr
+		exit 0
+	fi
+	# теперь проверяем корректность значений
+	# result=$(connect "select l_chet, elec, hv1, gv1 from acc_indication where l_chet like '$lc'") ; 
+	
+	result=$(connect "select p.КодЛицевогоСчета, p.ФИОСобственника, p.Адрес, i.НаименованиеУслуги, i.Потребление 
+		from person p, data_indic i where p.КодЛицевогоСчета = i.НомерЛицевогоСчета and p.КодЛицевогоСчета = '$lc' 
+		and i.Потребление>0 and (i.НаименованиеУслуги = 'Электроэнергия' or i.НаименованиеУслуги = 'Холодное водоснабжение (счетчик)' 
+		or i.НаименованиеУслуги = 'Горячее водоснабжение (счетчик)')");
+	
+#	 echo "result: $result"
+
+	 # проверка результата запроса
+	 lns=${#result}
+#	 echo "lengh=$lns"
+	# если результат пустой- лицевого в базе нет
+	# if [ -z $result ]; then
+	if [[ $lns<1 ]]; then
+		# echo "добавляем запись"
+		# добавляем записи в базу
+		# connect "insert into acc_indication(l_chet, elec, hv1, gv1, phone) values($lc, $el, $ho, $go, $fr)";
+		connect "insert into person(КодЛицевогоСчета, Телефон) values($lc, $fr)";
+		connect "insert into data_indic(НомерЛицевогоСчета, НаименованиеУслуги, Потребление) values($lc, 'Электроэнергия', $el_new)";
+		connect "insert into data_indic(НомерЛицевогоСчета, НаименованиеУслуги, Потребление) 
+		values($lc, 'Холодное водоснабжение (счетчик)', $hv_new)";
+		connect "insert into data_indic(НомерЛицевогоСчета, НаименованиеУслуги, Потребление) 
+		values($lc, 'Горячее водоснабжение (счетчик)', $gv_new)";
+	else
+		echo "проверяем показания"
+
+### получаем значения из данных запроса
+		el_old=`echo -e "$result" | grep "Электроэнергия"`
+		el_old=${el_old: -15}
+		el_old=`echo "$el_old" | cut -d "я" -f 2`
+	# преобразуем в значение с плавающей точкой
+		el_old=${el_old/,/.}
+
+		hv_old=`echo -e "$result" | grep "Холодное"`
+		hv_old=${hv_old: -15}
+		hv_old=`echo "$hv_old" | cut -d ")" -f 2`
+		hv_old=${hv_old/,/.}
+
+		gv_old=`echo -e "$result" | grep "Горячее"`
+		gv_old=${gv_old: -15}
+		gv_old=`echo "$gv_old" | cut -d ")" -f 2`
+		gv_old=${gv_old/,/.}
+
+# тут извлекаем максимальные данные изменений из файла max_data.dat
+		max_el=`grep -e "Электро:" /home/constantin/sms/max_data.dat | formail -zx Электро:`
+		max_hv=`grep -e "ХВС:" /home/constantin/sms/max_data.dat | formail -zx ХВС:`
+		max_gv=`grep -e "ГВС:" /home/constantin/sms/max_data.dat | formail -zx ГВС:`
+
+# операции с плавающей точкой только через калькулятор
+		sum_el=$(echo "$el_old+$max_el" | bc)
+		sum_hv=$(echo "$hv_old+$max_hv" | bc)
+		sum_gv=$(echo "$gv_old+$max_gv" | bc)
+
+# и сверяем принятые показания с ними или проверяем чтобы показания не были меньше учтеных
+		if [[ $(echo "${el_new} < ${el_old}" | bc) -eq 1  ||  $(echo "${hv_new} < ${hv_old}" | bc) -eq 1  
+		||  $(echo "${gv_new} < ${gv_old}" | bc) -eq 1 || $(echo "${el_new} > ${sum_el}" | bc) -eq 1 
+		|| $(echo "${hv_new} > ${sum_hv}" | bc) -eq 1 || $(echo "${gv_new} > ${sum_gv}" | bc) -eq 1 ]] 
+		then
+			# следует отправку ошибки вынести в функции, чтобы из любого модуля можно было сделать отправку смс
+			
+			send_error "Отправлены неверные данные!\nПоказания меньше учтеных или больше допустимых!" $fr
+
+			#echo -e "Отправлены неверные данные!\nПоказания меньше учтеных!" > /home/constantin/sms/conv/err_indic.sms
+    		#echo -e "To: $fr\nAlphabet: UCS2\n" > /home/constantin/sms/conv/send_er_ind.sms
+    		#iconv -f UTF-8 -t UCS-2BE /home/constantin/sms/conv/err_indic.sms >> /home/constantin/sms/conv/send_er_ind.sms
+    		## mv /var/spool/sms/conv/send_er_ind.sms /var/spool/sms/outgoing/
+    		## пока сюда
+    		#mv /home/constantin/sms/conv/send_er_ind.sms /home/constantin/sms/
+			
+			# вываливаемся из обработки
+			exit 0
+		fi
+		
+		# заменяем имеющиеся данные
+		# кстати, а если отправил данные другой чел ошибшись лицевым..
+		# наверно следует сделать проверку на занесенный телефон
+
+#		echo "Все путем! делаем апдейт записи"
+
+		# записываем новые показания в бд
+#		пока не буду записывать. если не одна запись по показаниям не туда можно записать
+		# connect "update acc_indication set elec=$el_new, hv1=$hv_new, gv1=$gv_new where l_chet like '$lc'";
+		
+	#	connect "update data_indic set Потребление=$el_new where НомерЛицевогоСчета = '$lc' and НаименованиеУслуги = 'Электроэнергия' and Потребление>0";
+	#	connect "update data_indic set Потребление=$hv_new where НомерЛицевогоСчета = '$lc' and НаименованиеУслуги = 'Холодное водоснабжение (счетчик)'";
+	#	connect "update data_indic set Потребление=$gv_new where НомерЛицевогоСчета = '$lc' and НаименованиеУслуги = 'Горячее водоснабжение (счетчик)'";
+	fi
+}
+
+# отправка смс об ошибке. сообщение и номер тел. передаются параметрами
+send_error()
+{
+	local err=$1
+	local phn=$2
+		# сначала кладем во времменый каталог для преобразования
+		echo -e "$err" > /var/spool/sms/conv/err_mess.sms
+    	echo -e "To: $phn\nAlphabet: UCS2\n" > /var/spool/sms/conv/send_er.sms
+    	iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/err_mess.sms >> /var/spool/sms/conv/send_er.sms
+    	mv /var/spool/sms/conv/send_er.sms /var/spool/sms/outgoing/
+   		# пока сюда
+   		# mv /home/constantin/sms/conv/send_er_ind.sms /home/constantin/sms/
+   		# ответ на ошибку в лог
+   		echo -e "$(date)\n$phn\n$err\n" >> /var/log/smsd/sms_err.log	
+}
+
+# варианты кода
+
+# пробный запрос. все путем!
+sel-rec(){
+	result=$(connect "select l_chet, elec, hv1, gv1 from acc_indication where l_chet like '$1'") ; 
+	echo $result;
+}
+
+# чтобы использовать этот, должно быть точное количество разделительных пробелов
+
+# sqlget='select id, code, name, brand  from table where id="'$id'"';
+#  result=$(mysql -h$host -u $dbuser -p$dbpass $db -e "$sqlget" -N -s);
+#      echo $result;
+#      code=$(echo $result | cut -d " " -f 2);
+#      name=$(echo $result | cut -d " " -f 3);
+#      brand=$(echo $result | cut -d " " -f 4);
+
+# Улица:м-н Березовый;Дом:28;Квартира:3.1;ФИО:;Лицевой счет:45645644;Тип прибора:Электро;Серийный  
+# номер:jk;Показания:67.6;Тип прибора:ХВС;Серийный номер:gh;Показания:456;Тип прибора:ГВС;Серийный 
+# номер:hg;Показания:678;Контактный телефон:+77777777777;E-mail:ff@jj.com;
+
+# проверка работы скрипта
+chck-arg () {
+echo "param: ${1} ${2} ${3} ${4} ${5}" 
+# получаем из строк только значения показаний
+local lc=$1
+local el=$2
+local ho=$3
+local go=$4
+# с телефоном не определился.. отслеживать или нет соответствие
+local fr=$5
+echo "data: $lc $el $ho $go $fr" 
+}
