@@ -51,7 +51,7 @@ if ! ( grep -i "^лс:" $trfile > /dev/null && grep -i "^эл:" $trfile > /dev/n
     # сначала кладем во времменый каталог для преобразования
     # исользуем функцию
 
-    send_error "Неверный формат СМС!\nВерный шаблон сообщения:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" $from
+    send_error "Неверный формат СМС!\nВерный шаблон сообщения:\nЛС:00000000\nЭЛ:000\nХВ:000\nГВ:000" $from
 
     #echo -e "Неправильный формат СМС!\nВерный шаблон сообщения:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" > /var/spool/sms/conv/err_mess.sms
     #echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/send_er.sms
@@ -63,16 +63,16 @@ fi
   # при получении значений сделать их оллтрим
   # проверить наличие цифр в строке
   lsch=`head $trfile | grep -i "^лс:"`
-  ele=`head $trfile | grep -i "эл:"`
+  ele=`head $trfile | grep -i "^эл:"`
   hov=""
   gov=""
   # далее по просьбе заказчика идут показатели еще 3 пар счетчиков.. но тогда нужно писать серийные номера каждого, 
   # чтобы была возможность их индентифицировать 
   # исправить хв и гв, было неправильно в файле
-  if grep -i "хв:" $trfile > /dev/null ; then
+  if grep -i "^хв:" $trfile > /dev/null ; then
     hov=`head $trfile | grep -i "^хв:"`
   fi
-  if grep -i "гв:" $trfile > /dev/null ; then
+  if grep -i "^гв:" $trfile > /dev/null ; then
     gov=`head $trfile | grep -i "^гв:"`
   fi
 
