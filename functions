@@ -57,12 +57,23 @@ gv_new=${gv_new/,/.}
 
 # проверка принятых показаний
 # echo "data: $lc $el $ho $go" 
+	###############
 	# сначала проверяем сколько у чела квартир, если больше одной - футболим
 	moreone=$(connect "select count(*) from person where person.КодЛицевогоСчета like '$lc'") ; 
 	if [[ $moreone>1 ]]; then
 		send_error "Невозможно принять показания.\nОбратитесь в офис УК." $fr
 		exit 0
 	fi
+	###############
+	# проверяем отправлены хоть какие то значения
+	is_data=$(echo "$el_new+$hv_new+$gv_new" | bc)
+	if [[ $(echo "${is_data} == 0" | bc) -eq 1 ]]; then
+		#echo -e "data: $lc $el_new $hv_new $gv_new\n" > /home/constantin/sms/err/is_data
+		#echo -e "all: $is_data" >> /home/constantin/sms/err/is_data
+		send_error "В полученном СМС нулевые показания." $fr
+		exit 0
+	fi
+	##############
 	# теперь проверяем корректность значений
 	# result=$(connect "select l_chet, elec, hv1, gv1 from acc_indication where l_chet like '$lc'") ; 
 	
@@ -165,11 +176,32 @@ send_error()
 {
 	local err=$1
 	local phn=$2
+	# код ошибки 0 неверное
+	# local met=$3
+	# FILE=`mktemp /tmp/sms_erm_XXXXXX`
+	FILE1=`mktemp /tmp/sms_err.XXXXXX`
+	day=$(date)
+	day=${day:7:2}
+		# проверяем отправляли ли челу уже смс
+		if ( grep -i $phn /home/constantin/sms/nomera.dat > /dev/null ); then
+      		#уже отправляли смс
+      		exit 0
+      	else
+      		# проверка по диапазону дат приема показаний
+      		if ( $phn != '79647407381'); then
+      			if (( $day < 20 || $day > 25 )); then
+      				exit 0
+      			fi
+      		fi
+      		echo "$phn" >> /home/constantin/sms/nomera.dat
+    	fi
 		# сначала кладем во времменый каталог для преобразования
-		echo -e "$err" > /var/spool/sms/conv/err_mess.sms
-    	echo -e "To: $phn\nAlphabet: UCS2\n" > /var/spool/sms/conv/send_er.sms
-    	iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/err_mess.sms >> /var/spool/sms/conv/send_er.sms
-    	mv /var/spool/sms/conv/send_er.sms /var/spool/sms/outgoing/
+		#echo -e "$err" > /var/spool/sms/conv/err_mess.sms
+		#echo -e "$err" > FILE
+		# нафига! все делаем зараз
+    	echo -e "To: $phn\nAlphabet: UCS2\n" > $FILE1
+    	echo -e "$err" | iconv -f UTF-8 -t UCS-2BE >> $FILE1
+    	mv $FILE1 /var/spool/sms/outgoing/
    		# пока сюда
    		# mv /home/constantin/sms/conv/send_er_ind.sms /home/constantin/sms/
    		# ответ на ошибку в лог

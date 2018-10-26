@@ -20,7 +20,7 @@ flnm=${file: -11}
 
 case "$1" in
   RECEIVED)
-    FILE=`mktemp /tmp/smsd_XXXXXX`
+    # FILE=`mktemp /tmp/smsd_XXXXXX`
 
     header=`head -13 $file | grep -e "^From: " -e "^Sent: " -e "^Received: "`
     from=`head -13 $file | grep -e "^From: " | awk '{print $2}'`
@@ -30,13 +30,28 @@ case "$1" in
         else
                 message=`tail -n +14 $file`
     fi
+    
+    # если телега то в уссд ее
+    if grep -i "Tele2" $file > /dev/null ; then
+      echo -e "$header\n$message\n" > /home/constantin/sms/ussd/$flnm
+      chmod a+r /home/constantin/sms/ussd/$flnm
+      exit 0
+    fi
+    # если неправильный номер то на выход
+    if [[ $(echo "${from} < 79000000000" | bc) -eq 1 ]]; then
+      exit 0
+    fi
         # отправка на почту почему то не работает пока отключу здесь
         # echo -e "$message" | mail -s "Incoming SMS from +$from" in@vivaluks.ru
         # перекладываем сюда с преобразованной кодировкой сообщения, понадобится для отправки об неверном вводе данных
         # и для получения показаний (заносится в переменную trfile)
         # лучше не использовать sent
         # echo -e "$header\n$message\n" > /var/spool/sms/sent/$flnm
+        
+        # удалить при ошибке
+        # при неверных показаниях которые проверяются в функции, остается неудаленным
         echo -e "$header\n$message\n" > /var/spool/sms/conv/$flnm
+
 # паралельно все пишем в лог
         echo -e "$header\n$message\n" >> /var/log/smsd/sms.log
 # второй этап процесса
@@ -45,13 +60,25 @@ case "$1" in
 # лучше не использовать sent
 # trfile="/var/spool/sms/sent/$flnm"
 trfile="/var/spool/sms/conv/$flnm"
+
+# проверка на чужих, а то на смс разорение 
+# при первоначальном смс никак не проверить принадлежность в базе ((
+
+# проверялось обязательное наличие показаний электроэнергии, короче необходимых строк
 if ! ( grep -i "^лс:" $trfile > /dev/null && grep -i "^эл:" $trfile > /dev/null )
-    then
+
+# делаю раздельный прием, поэтом любой из показателей
+#if ! ( grep -i "^лс:" $trfile > /dev/null && ( grep -i "эл:" $trfile > /dev/null || grep -i "хв:" $trfile > /dev/null || grep -i "гв:" $trfile > /dev/null ) )    then
+
     # используем функцию, но пока отладка - оставил как есть
     # сначала кладем во времменый каталог для преобразования
     # исользуем функцию
-
-    send_error "Неверный формат СМС!\nВерный шаблон сообщения:\nЛС:00000000\nЭЛ:000\nХВ:000\nГВ:000" $from
+    rm /var/spool/sms/conv/$flnm
+    # не так. сделал в функции
+    #if ( grep -i "^лс:" $trfile > /dev/null ); then
+      #statements
+    #fi
+    send_error "Неверное СМС!\nВерный шаблон, строки переносить:\nЛС:00000000\nЭЛ:00000\nХВ:000\nГВ:000" $from
 
     #echo -e "Неправильный формат СМС!\nВерный шаблон сообщения:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" > /var/spool/sms/conv/err_mess.sms
     #echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/send_er.sms
@@ -60,20 +87,26 @@ if ! ( grep -i "^лс:" $trfile > /dev/null && grep -i "^эл:" $trfile > /dev/n
     # при фуфле в смс выходим
     exit 0
 fi
-  # при получении значений сделать их оллтрим
-  # проверить наличие цифр в строке
+
+  # получаем значения принятых показаний
   lsch=`head $trfile | grep -i "^лс:"`
-  ele=`head $trfile | grep -i "^эл:"`
+  #ele=""
   hov=""
   gov=""
   # далее по просьбе заказчика идут показатели еще 3 пар счетчиков.. но тогда нужно писать серийные номера каждого, 
   # чтобы была возможность их индентифицировать 
-  # исправить хв и гв, было неправильно в файле
+    
+  #if grep -i "^эл:" $trfile > /dev/null ; then
+    ele=`head $trfile | grep -i "^эл:"`
+    el=`echo "$ele" | formail -zx ЭЛ:`
+  #fi
   if grep -i "^хв:" $trfile > /dev/null ; then
     hov=`head $trfile | grep -i "^хв:"`
+    ho=`echo "$hov" | formail -zx ХВ:`
   fi
   if grep -i "^гв:" $trfile > /dev/null ; then
     gov=`head $trfile | grep -i "^гв:"`
+    go=`echo "$gov" | formail -zx ГВ:`
   fi
 
   # а теперь надо записать в файлы и положить их в outgoing для ок ответа и в tomail для отправки эл.почтой
@@ -89,26 +122,48 @@ fi
   # если меньше шлем смс об ошибочных данных
   # получаем значения показаний
   lc=`echo "$lsch" | formail -zx ЛС:`
-  el=`echo "$ele" | formail -zx ЭЛ:`
-  ho=`echo "$hov" | formail -zx ХВ:`
-  go=`echo "$gov" | formail -zx ГВ:`
+
+# проверка введенного лицевого, а не черте чо
+is_dig=`echo "$lc" | grep -o -E '[[:digit:]]+'`
+is_dig=$[is_dig+1]
+if (( $is_dig < 10000000 )); then
+  send_error "Неверный лицевой счет!" $from
+  exit 0
+fi
+# поверка не нулевых показаний, но пройдет если даже только текст в строке
+#  if [ $el == "" ]; then
+# по хорошему проверяем еще и показания на наличие цифр
+# делал по аналогии с лицевым, но..
+# is_dig=`echo "$lc" | grep -o -E '[[:digit:]]+'`
+# is_dig=$[is_dig+1]
+#### это не катит потому что не вкуривает десятичные!!!
+# смотри удаленный фрагмент в trsms_фрагменты
+#########################
   fr=$from
   
   # отправляем их в функцию параметрами
-  # пока отключил. с базой разбираюсь
   exch_bd $lc $el $ho $go $fr
+  #exch_bd $lc $el $ho $go $from $flnm
   #
-  
-  echo -e "От вас поступили показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/conv/mes$flnm
-  echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/$flnm
-  iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/mes$flnm >> /var/spool/sms/conv/$flnm
+
+  # перенес весь процес в функцию
+#  exit 0
+  #
+
+  # зачем два приема когда можно за раз
+  # echo -e "От вас поступили показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/conv/mes$flnm
+  echo -e "To: $fr\nAlphabet: UCS2\n" > /var/spool/sms/conv/$flnm
+  # iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/mes$flnm >> /var/spool/sms/conv/$flnm
+  echo -e "От вас поступили показания:\n$lsch;$ele;$hov;$gov" | iconv -f UTF-8 -t UCS-2BE >> /var/spool/sms/conv/$flnm
   mv /var/spool/sms/conv/$flnm /var/spool/sms/outgoing/
-  echo "$lsch;$ele;$hov;$gov;Телефон:+$from" > /home/constantin/sms/tomail/$flnm
-  rm /var/spool/sms/conv/mes$flnm
+  #echo "$lsch;$ele;$hov;$gov;Телефон:+$fr" > /home/constantin/sms/tomail/$flnm
+  message="$lsch;$ele;$hov;$gov;Телефон:+$fr"
+  echo "$message" > /home/constantin/sms/tomail/$flnm
+  # rm /var/spool/sms/conv/mes$flnm
 # разрешаем всем читать смс
   chmod a+r /home/constantin/sms/tomail/$flnm
   # отправка на почту почему то не работает 
-  message="$lsch;$ele;$hov;$gov;Телефон:+$from"
+  
   # и здесь отправка дубля показаний на эл.почту, пока отключил
   # echo -e "$message" | mail -s -r ck@onlight.pro "Incoming SMS from +$from" in@vivaluks.ru
   # отправка в лог
@@ -128,10 +183,10 @@ fi
     # regular_run_cmd = AT+CUSD=1,"*100#",15;
     # regular_run_interval = 604800
     ;;  
-  CALL) 
+  #CALL) 
     # реагируем на звонок
     # пока убрал. см. файл на звонок
-    send_error "Номер принимает только СМС." $from
+    #send_error "Номер принимает только СМС." $fr
     # echo "Звонок!"
     #FILE=`mktemp /tmp/send_XXXXXX`
     #FILE1=`mktemp /tmp/send_XXXXXX`
@@ -140,7 +195,7 @@ fi
     #iconv -f UTF-8 -t UCS-2BE $FILE1  >> $FILE
     #FILE2=`mktemp /var/spool/sms/outgoing/send_XXXXXX`
     #mv $FILE $FILE2    
-  ;;
+  #;;
   *)
     echo "$*" >>/var/log/smsd/others.log
     ;;
