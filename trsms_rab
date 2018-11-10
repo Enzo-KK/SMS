@@ -31,10 +31,16 @@ case "$1" in
                 message=`tail -n +14 $file`
     fi
     
-    # если телега то в уссд ее
+    # если телега то в уссд ее и лехе на номер
     if grep -i "Tele2" $file > /dev/null ; then
       echo -e "$header\n$message\n" > /home/constantin/sms/ussd/$flnm
       chmod a+r /home/constantin/sms/ussd/$flnm
+      # лехе
+      lehe=`tail -n +14 $file`
+      echo -e "To: 79647407381\n$header\n$lehe\n" > /var/spool/sms/conv/$flnm1
+      echo -e "To: 79148805209\n$header\n$lehe\n" > /var/spool/sms/conv/$flnm
+      mv /var/spool/sms/conv/$flnm /var/spool/sms/outgoing/
+      mv /var/spool/sms/conv/$flnm1 /var/spool/sms/outgoing/
       exit 0
     fi
     # если неправильный номер то на выход
@@ -65,14 +71,14 @@ trfile="/var/spool/sms/conv/$flnm"
 # при первоначальном смс никак не проверить принадлежность в базе ((
 
 # проверялось обязательное наличие показаний электроэнергии, короче необходимых строк
-if ! ( grep -i "^лс:" $trfile > /dev/null && grep -i "^эл:" $trfile > /dev/null )
+#if ! ( grep -i "^лс:" $trfile > /dev/null && grep -i "^эл:" $trfile > /dev/null )
 
 # делаю раздельный прием, поэтом любой из показателей
-#if ! ( grep -i "^лс:" $trfile > /dev/null && ( grep -i "эл:" $trfile > /dev/null || grep -i "хв:" $trfile > /dev/null || grep -i "гв:" $trfile > /dev/null ) )    then
+if ! ( grep -i "^лс:" $trfile > /dev/null && ( grep -i "^эл:" $trfile > /dev/null || grep -i "^хв:" $trfile > /dev/null || grep -i "^гв:" $trfile > /dev/null ) )    then
 
     # используем функцию, но пока отладка - оставил как есть
     # сначала кладем во времменый каталог для преобразования
-    # исользуем функцию
+    # даляем временный айл
     rm /var/spool/sms/conv/$flnm
     # не так. сделал в функции
     #if ( grep -i "^лс:" $trfile > /dev/null ); then
@@ -96,10 +102,10 @@ fi
   # далее по просьбе заказчика идут показатели еще 3 пар счетчиков.. но тогда нужно писать серийные номера каждого, 
   # чтобы была возможность их индентифицировать 
     
-  #if grep -i "^эл:" $trfile > /dev/null ; then
+  if grep -i "^эл:" $trfile > /dev/null ; then
     ele=`head $trfile | grep -i "^эл:"`
     el=`echo "$ele" | formail -zx ЭЛ:`
-  #fi
+  fi
   if grep -i "^хв:" $trfile > /dev/null ; then
     hov=`head $trfile | grep -i "^хв:"`
     ho=`echo "$hov" | formail -zx ХВ:`
@@ -142,12 +148,12 @@ fi
   fr=$from
   
   # отправляем их в функцию параметрами
-  exch_bd $lc $el $ho $go $fr
-  #exch_bd $lc $el $ho $go $from $flnm
+  #exch_bd $lc $el $ho $go $fr
+  exch_bd $lc $el $ho $go $from $flnm
   #
 
   # перенес весь процес в функцию
-#  exit 0
+  exit 0
   #
 
   # зачем два приема когда можно за раз
@@ -183,10 +189,10 @@ fi
     # regular_run_cmd = AT+CUSD=1,"*100#",15;
     # regular_run_interval = 604800
     ;;  
-  #CALL) 
+  CALL) 
     # реагируем на звонок
     # пока убрал. см. файл на звонок
-    #send_error "Номер принимает только СМС." $fr
+    send_error "Номер принимает только СМС." $fr
     # echo "Звонок!"
     #FILE=`mktemp /tmp/send_XXXXXX`
     #FILE1=`mktemp /tmp/send_XXXXXX`
@@ -195,7 +201,7 @@ fi
     #iconv -f UTF-8 -t UCS-2BE $FILE1  >> $FILE
     #FILE2=`mktemp /var/spool/sms/outgoing/send_XXXXXX`
     #mv $FILE $FILE2    
-  #;;
+  ;;
   *)
     echo "$*" >>/var/log/smsd/others.log
     ;;

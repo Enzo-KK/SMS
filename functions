@@ -49,6 +49,7 @@ local hv_new=$3
 local gv_new=$4
 # с телефоном не определился.. отслеживать или нет соответствие
 local fr=$5
+local fn=$6
 
 # преобразуем в значение с плавающей точкой
 el_new=${el_new/,/.}
@@ -130,30 +131,84 @@ gv_new=${gv_new/,/.}
 		sum_gv=$(echo "$gv_old+$max_gv" | bc)
 
 # и сверяем принятые показания с ними или проверяем чтобы показания не были меньше учтеных
-		if [[ $(echo "${el_new} < ${el_old}" | bc) -eq 1  ||  $(echo "${hv_new} < ${hv_old}" | bc) -eq 1  
-		||  $(echo "${gv_new} < ${gv_old}" | bc) -eq 1 ]] 
+		#if [[ $(echo "${el_new} < ${el_old}" | bc) -eq 1  ||  $(echo "${hv_new} < ${hv_old}" | bc) -eq 1  
+		#||  $(echo "${gv_new} < ${gv_old}" | bc) -eq 1 ]] 
+		
+		# делаем раздельную проверку показаний
+		if [[ $el_new == 0 || $(echo "${el_new} < ${el_old}" | bc) -eq 1  ||  $(echo "${el_new} > ${sum_el}" | bc) -eq 1 ]] 
 		then
-			# меньше учтеных
-			send_error "Отправлены неверные данные!\nПоказания меньше поданных вами ранее!" $fr
-
-			#echo -e "Отправлены неверные данные!\nПоказания меньше учтеных!" > /home/constantin/sms/conv/err_indic.sms
-    		#echo -e "To: $fr\nAlphabet: UCS2\n" > /home/constantin/sms/conv/send_er_ind.sms
-    		#iconv -f UTF-8 -t UCS-2BE /home/constantin/sms/conv/err_indic.sms >> /home/constantin/sms/conv/send_er_ind.sms
-    		## mv /var/spool/sms/conv/send_er_ind.sms /var/spool/sms/outgoing/
-    		## пока сюда
-    		#mv /home/constantin/sms/conv/send_er_ind.sms /home/constantin/sms/
-			
-			# вываливаемся из обработки
-			exit 0
-		elif [[ $(echo "${el_new} > ${sum_el}" | bc) -eq 1 || $(echo "${hv_new} > ${sum_hv}" | bc) -eq 1 
-		|| $(echo "${gv_new} > ${sum_gv}" | bc) -eq 1 ]]
-		then
-			# больше допустимых
-			send_error "Отправлены неверные данные!\nПоказания слишком большие!" $fr
-			
-			# вываливаемся из обработки
-			exit 0		
+			# электроэнергию не принимаем
+			echo "нет электроэнергии: $el_new."
+			el_new=0
+			#el_err='ЭЛ'
 		fi
+		if [[ $hv_new == 0 || $(echo "${hv_new} < ${hv_old}" | bc) -eq 1  ||  $(echo "${hv_new} > ${sum_hv}" | bc) -eq 1 ]] 
+		then
+			# холодную воду не принимаем
+			hv_new=0
+			#hv_err='ХВ'
+		fi
+		if [[ $gv_new == 0 || $(echo "${gv_new} < ${gv_old}" | bc) -eq 1  ||  $(echo "${gv_new} > ${sum_gv}" | bc) -eq 1 ]] 
+		then
+			# горячую воду не принимаем
+			gv_new=0
+			#gv_err='ГВ'
+		fi
+#			send_error "Отправлены неверные данные!\nПоказания меньше поданных вами ранее!" $fr
+
+#### перенес из основного скрипта сюда
+		no_in=""
+		str_out_sms="ЛС:$lc;"
+		str_out=";;;;Лицевой счет:$lc;"
+		if [[ $el_new != 0 ]]; then
+			str_out_sms="$str_out_smsЭЛ:$2;"
+			str_out="$str_outТип прибора:Электро;;Показания:$2;"
+		else
+			no_in="ЭЛ;"
+		fi
+		if [[ $hv_new != 0 ]]; then
+			str_out_sms="$str_out_smsХВ:$3;"
+			str_out="$str_outТип прибора:ХВС;;Показания:$3;"
+		else
+			no_in="$no_inХВ;"
+		fi
+		if [[ $gv_new != 0 ]]; then
+			str_out_sms="$str_out_smsГВ:$4"
+			str_out="$str_outТип прибора:ГВС;;Показания:$4;"
+		else
+			no_in="$no_inГВ"
+		fi
+
+		echo -e "От вас поступили показания:\n$str_out_sms" > /var/spool/sms/conv/mes$fn
+		# если есть неверные
+		if [[ $el_new == 0 || $hv_new == 0 || $gv_new == 0 ]]; then
+			echo -e "Не приняты: $no_in" >> /var/spool/sms/conv/mes$fn
+		fi
+		echo -e "To: $fr\nAlphabet: UCS2\n" > /var/spool/sms/conv/$fn
+  		iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/mes$fn >> /var/spool/sms/conv/$fn
+  		mv /var/spool/sms/conv/$fn /var/spool/sms/outgoing/
+  		
+  		####### чтоб не отправлять пока. проверочный вариант
+  		# mv /var/spool/sms/conv/$fn /home/constantin/sms/chk/
+  		# chmod a+r /home/constantin/sms/chk/$fn
+  		# exit 0
+  		########
+  		
+  		message="$str_out;Контактный телефон:+$fr;;"
+  		echo "$message" > /home/constantin/sms/tomail/$fn
+  		rm /var/spool/sms/conv/mes$fn
+		# разрешаем всем читать смс
+  		chmod a+r /home/constantin/sms/tomail/$fn
+  		# отправка на почту почему то не работает 
+  		
+  		# и здесь отправка дубля показаний на эл.почту, пока отключил
+  		# echo -e "$message" | mail -s -r ck@onlight.pro "Incoming SMS from +$from" in@vivaluks.ru
+  		# отправка в лог
+  		echo -e "$(date)\n$message\n" >> /var/log/smsd/sms_snt.log
+    	# на фтп не вкуриваются пути, только имя файла
+  		cd /home/constantin/sms/tomail
+  		ftp -in -u ftp://j880085_wp3:shE6Wctw58Q@159dz.spectrum.myjino.ru/site/getpu/inSMS/ $fn
+#######
 		
 		# заменяем имеющиеся данные
 		# кстати, а если отправил данные другой чел ошибшись лицевым..
@@ -188,7 +243,7 @@ send_error()
       		exit 0
       	else
       		# проверка по диапазону дат приема показаний
-      		if ( $phn != '79647407381'); then
+      		if (( $phn != '79647407381' )); then
       			if (( $day < 20 || $day > 25 )); then
       				exit 0
       			fi
