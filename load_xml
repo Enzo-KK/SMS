@@ -2,10 +2,26 @@
 source "/home/constantin/sms/functions"
 # файл для запуска по расписанию 
 # берем файл с фтп и запускаем обработку и загрузку в бд
-ftp -in  ftp://j880085_wp3:shE6Wctw58Q@159dz.spectrum.myjino.ru/site/getpu/inSMS/IPK.zip
+# ftp -in  ftp://j880085_wp3:shE6Wctw58Q@159dz.spectrum.myjino.ru/site/getpu/inSMS/IPK.zip
+# пока на фтп база не выгружается. запускаем с параметром
+# проверка параметра
+if [ -z "$1" ]
+then
+	echo "Нет параметра! Имя базы."
+	echo 'И не забудь что будет удаление таблиц!'
+	exit 0
+fi
 
-mak_gud_xml
+# преобразовываем хмл файл 
+mak_gud_xml $1
 
-fill_base
+# чистим базу данных
+connect "TRUNCATE TABLE money;"
+connect "TRUNCATE TABLE person;"
+connect "TRUNCATE TABLE pribori;"
+connect "TRUNCATE TABLE data_indic;"
+
+# грузим хмл в базу данных
+fill_base 
 
 # ну и все..

@@ -17,6 +17,10 @@ file="$2"
 # имя файла будет /var/spool/sms/incoming/GSM1.0eu5Pv"
 # flnm=${file:24}
 flnm=${file: -11}
+# данные в смс заведомо плохие
+el_ok=0
+ho_ok=0
+go_ok=0
 
 case "$1" in
   RECEIVED)
@@ -32,21 +36,39 @@ case "$1" in
     fi
     
     # если телега то в уссд ее и лехе на номер
-    if grep -i "Tele2" $file > /dev/null ; then
+    # рабочий вариант
+    if (  grep "Tele2" $file > /dev/null ) ; then
       echo -e "$header\n$message\n" > /home/constantin/sms/ussd/$flnm
       chmod a+r /home/constantin/sms/ussd/$flnm
-      # лехе
-      lehe=`tail -n +14 $file`
-      echo -e "To: 79647407381\n$header\n$lehe\n" > /var/spool/sms/conv/$flnm1
-      echo -e "To: 79148805209\n$header\n$lehe\n" > /var/spool/sms/conv/$flnm
-      mv /var/spool/sms/conv/$flnm /var/spool/sms/outgoing/
-      mv /var/spool/sms/conv/$flnm1 /var/spool/sms/outgoing/
+      # лехе или мне
+      echo "$from"
+      # для проверки отправлял себе
+      # echo -e "To: 79647407381\nAlphabet: UCS2\n" > /tmp/$flnm
+      echo -e "To: 79148805209\nAlphabet: UCS2\n" > /tmp/$flnm
+      #echo -e "$lehe" >> /tmp/$flnm
+      
+      # криво преобразуется. только через файл
+      #message=`echo -e "$message" | iconv -f UTF-8 -t UCS-2BE`
+      echo -e "$message" >  /tmp/_$flnm
+      iconv -f UTF-8 -t UCS-2BE /tmp/_$flnm >> /tmp/$flnm
+      #mv /var/spool/sms/conv/$flnm /var/spool/sms/outgoing/
+      mv /tmp/$flnm /var/spool/sms/outgoing/
       exit 0
     fi
-    # если неправильный номер то на выход
-    if [[ $(echo "${from} < 79000000000" | bc) -eq 1 ]]; then
+    # если неправильный номер телефона, то на выход
+    #is_dig=`echo "$from" | grep -o -E '[[:digit:]]+'`
+    #is_dig=$[is_dig+1]
+    # можно проще
+    is_dig=${from//[^0-9]/}
+    if [[ $(echo "${is_dig} < 79000000000" | bc) -eq 1 ]]; then  
       exit 0
     fi
+    # пока всех отбрил
+    #if [[ $(echo "${from} == 79647407381" | bc) -ne 1 ]]; then
+    #if [[ $(echo "${from} == 79148805209" | bc) -ne 1 ]]; then
+    #  exit 0
+    #fi
+
         # отправка на почту почему то не работает пока отключу здесь
         # echo -e "$message" | mail -s "Incoming SMS from +$from" in@vivaluks.ru
         # перекладываем сюда с преобразованной кодировкой сообщения, понадобится для отправки об неверном вводе данных
@@ -70,110 +92,185 @@ trfile="/var/spool/sms/conv/$flnm"
 # проверка на чужих, а то на смс разорение 
 # при первоначальном смс никак не проверить принадлежность в базе ((
 
-# проверялось обязательное наличие показаний электроэнергии, короче необходимых строк
-#if ! ( grep -i "^лс:" $trfile > /dev/null && grep -i "^эл:" $trfile > /dev/null )
-
 # делаю раздельный прием, поэтом любой из показателей
-# if ! ( grep -i "^лс:" $trfile > /dev/null && ( grep -i "^эл:" $trfile > /dev/null || grep -i "^хв:" $trfile > /dev/null || grep -i "^гв:" $trfile > /dev/null ) );    then
 # теперь делаю прием однострочных показаний, поэтому проверяем для начала только наличие лицевого
 if ! ( grep -i "^лс:" $trfile > /dev/null );    then
 
-    # используем функцию, но пока отладка - оставил как есть
-    # сначала кладем во времменый каталог для преобразования
-    # исользуем функцию
     rm /var/spool/sms/conv/$flnm
-    # не так. сделал в функции
-    #if ( grep -i "^лс:" $trfile > /dev/null ); then
-      #statements
-    #fi
-    send_error "Неверное СМС!\nВерный шаблон, строки переносить:\nЛС:00000000\nЭЛ:00000\nХВ:000\nГВ:000" $from
-
-    #echo -e "Неправильный формат СМС!\nВерный шаблон сообщения:\nЛС:88888888\nЭЛ:555\nХВ:444\nГВ:333" > /var/spool/sms/conv/err_mess.sms
-    #echo -e "To: $from\nAlphabet: UCS2\n" > /var/spool/sms/conv/send_er.sms
-    #iconv -f UTF-8 -t UCS-2BE /var/spool/sms/conv/err_mess.sms >> /var/spool/sms/conv/send_er.sms
-    #mv /var/spool/sms/conv/send_er.sms /var/spool/sms/outgoing/
+    send_error "Неверное СМС!\nВерный шаблон:\nЛС:00000000 ЭЛ:NNN*00000 ХВ:NNN*000 ГВ:NNN*000\nNNN - номер прибора" $from
     # при фуфле в смс выходим
     exit 0
 fi
+# инициализируем показания
+el=0
+ho=0
+go=0
+
 # если написано одной строкой
 if ! ( grep -i "^эл:" $trfile > /dev/null || grep -i "^хв:" $trfile > /dev/null || grep -i "^гв:" $trfile > /dev/null ); then
-  #statements
+  # разбираем значения из строки через пробелы
+  # если нарушен порядок (лс, эл, хв, гв) то привет - данные не примутся
   lsch=$(echo "$message" | cut -d " " -f1)
-  ele=$(echo "$message" | cut -d " " -f2)
-  hov=$(echo "$message" | cut -d " " -f3)
-  gov=$(echo "$message" | cut -d " " -f4)
-  if ! ( echo "$ele" | grep -i "эл:" > /dev/null || echo "$hov" | grep -i "хв:" > /dev/null || echo "$gov" | grep -i "гв:" > /dev/null ); then
-    #statements
-    send_error "Неверное СМС!\nВерный шаблон:\nЛС:00000000 ЭЛ:00000 ХВ:000 ГВ:000" $from
-    exit 0
+  # было так 
+  #ele=$(echo "$message" | cut -d " " -f2)
+  #hov=$(echo "$message" | cut -d " " -f3)
+  #gov=$(echo "$message" | cut -d " " -f4)
+  
+  # предусмотрен порядок эл-хв-гв, эл-хв, эл-гв, хв-гв и по отдельности
+  if ( grep -i "эл:" $trfile > /dev/null ); then
+    ele=$(echo "$message" | cut -d " " -f2)
+    if ( grep -i "хв:" $trfile > /dev/null ); then
+      hov=$(echo "$message" | cut -d " " -f3)
+      if ( grep -i "гв:" $trfile > /dev/null ); then
+        gov=$(echo "$message" | cut -d " " -f4)
+      else
+        gov=0
+      fi
+    else
+      if ( grep -i "гв:" $trfile > /dev/null ); then
+        gov=$(echo "$message" | cut -d " " -f3)
+      else
+        gov=0
+      fi
+      hov=0
+    fi
   else
-    el=`echo "$ele" | formail -zx ЭЛ:`
-    ho=`echo "$hov" | formail -zx ХВ:`
-    go=`echo "$gov" | formail -zx ГВ:`
+    if ( grep -i "хв:" $trfile > /dev/null ); then
+      hov=$(echo "$message" | cut -d " " -f2)
+      if ( grep -i "гв:" $trfile > /dev/null ); then
+        gov=$(echo "$message" | cut -d " " -f3)
+      else
+        gov=0
+      fi
+    else
+      if ( grep -i "гв:" $trfile > /dev/null ); then
+        gov=$(echo "$message" | cut -d " " -f2)
+      else
+        gov=0
+      fi
+      hov=0
+    fi
+    ele=0
+  fi
+  # надо проверить порядок показаний и чтобы там была не лажа
+  # лицевой будет проверен после раскладов, пропускаем
+  # остальные показания проверяем по порядку
+  # электроэнергия
+  if ( [ ${#ele}>3 ] && ( echo "$ele" | grep -i "эл:" > /dev/null ) ); then
+    # если норм
+    # оказалось формейл требователен к регистру! поэтому катом
+    #el=`echo "$ele" | formail -zx ЭЛ:`
+    # берем значения
+    el=`echo "$ele" | cut -d ":" -f 2`
+    # убираем пробелы
+    el=`echo ${el// /}`
+    # проверяем есть ли цифры
+    #is_dig=`echo "$el" | grep -o -E '[[:digit:]]+'`
+    # лучше так
+    el_chk=${el//[^0-9]/}
+    #is_dig=$[is_dig+1]
+    if (( ${#el_chk} > 0 )); then
+      el_ok=1
+    fi
+  fi
+  # холодная вода
+  if ( [ ${#hov}>3 ] && ( echo "$hov" | grep -i "хв:" > /dev/null ) ); then
+    ho=`echo "$hov" | cut -d ":" -f 2`
+    ho=`echo ${ho// /}`
+    # проверяем показания
+    ho_chk=${ho//[^0-9]/}
+    if (( ${#ho_chk} > 0 )); then
+      ho_ok=1
+    fi
+  fi
+  # горячая вода
+  if ( [ ${#gov}>3 ] && ( echo "$gov" | grep -i "гв:" > /dev/null ) ); then
+    go=`echo "$gov" | cut -d ":" -f 2`
+    go=`echo ${go// /}`
+    go_chk=${go//[^0-9]/}
+    if (( ${#go_chk} > 0 )); then
+      go_ok=1
+    fi
   fi
 else
   # показания построчные
   # получаем значения принятых показаний
   lsch=`head $trfile | grep -i "^лс:"`
-  #ele=""
-  hov=""
-  gov=""
   # далее по просьбе заказчика идут показатели еще 3 пар счетчиков.. но тогда нужно писать серийные номера каждого, 
   # чтобы была возможность их индентифицировать 
-    
+
+# проверяем все как и выше
   if grep -i "^эл:" $trfile > /dev/null ; then
     ele=`head $trfile | grep -i "^эл:"`
-    el=`echo "$ele" | formail -zx ЭЛ:`
+# оказалось формейл требователен к регистру! поэтому катом   
+    #el=`echo "$ele" | formail -zx ЭЛ:`
+    el=`echo "$ele" | cut -d ":" -f 2`
+    # убираем пробелы
+    el=`echo ${el// /}`
+    el_chk=${el//[^0-9]/}
+    if (( ${#el_chk} > 0 )); then
+      el_ok=1
+    fi
   fi
   if grep -i "^хв:" $trfile > /dev/null ; then
     hov=`head $trfile | grep -i "^хв:"`
-    ho=`echo "$hov" | formail -zx ХВ:`
+    #ho=`echo "$hov" | formail -zx ХВ:`
+    ho=`echo "$hov" | cut -d ":" -f 2`
+    ho=`echo ${ho// /}`
+    ho_chk=${ho//[^0-9]/}
+    if (( ${#ho_chk} > 0 )); then
+      ho_ok=1
+    fi
   fi
   if grep -i "^гв:" $trfile > /dev/null ; then
     gov=`head $trfile | grep -i "^гв:"`
-    go=`echo "$gov" | formail -zx ГВ:`
+    #go=`echo "$gov" | formail -zx ГВ:`
+    go=`echo "$gov" | cut -d ":" -f 2`
+    go=`echo ${go// /}`
+    go_chk=${go//[^0-9]/}
+    if (( ${#go_chk} > 0 )); then
+      go_ok=1
+    fi
   fi
 fi
-  # а теперь надо записать в файлы и положить их в outgoing для ок ответа и в tomail для отправки эл.почтой
-  # имена файлов для отправки ответа клиенту и на почту или ftp для учета данных
 
-  #fileans=${flnm/GSM1/send/GSM1}
-  #filetomail=${flnm/GSM1/tomail/GSM1}
-
-  # str_out= echo -e "To: $from\n\nОт вас приняты показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/outgoing/$flnm
+  # проверяем что получилось. если все метки по по нулям (что по умолчанию) значит фуфло
+  # ну намудрил
+  #if [[ $(echo "${el} == 0" | bc) -eq 1 && $(echo "${ho} == 0" | bc) -eq 1 && $(echo "${go} == 1" | bc) -eq 1  ]]; then    
+  if (( $el_ok==0 && $go_ok==0 && $ho_ok==0 )); then
+    #statements
+    send_error "Неверное СМС!\nВерный шаблон:\nЛС:00000000 ЭЛ:NNN*00000 ХВ:NNN*000 ГВ:NNN*000\nNNN - номер прибора" $from
+    exit 0
+  fi  
   
-  # запускаем функцию проверки-записи в бд
-  # если нет добавляем, если есть проверяем чтобы показания были не меньше учтеных
-  # если меньше шлем смс об ошибочных данных
-  # получаем значения показаний
-  lc=`echo "$lsch" | formail -zx ЛС:`
+  #lc=`echo "$lsch" | formail -zx ЛС:`
+  # оказалось формейл требователен к регистру! поэтому катом   
+  lc=`echo "$lsch" | cut -d ":" -f 2`
+  lc=`echo ${lc// /}`
 
   # проверка введенного лицевого, а не черте чо
   is_dig=`echo "$lc" | grep -o -E '[[:digit:]]+'`
-  is_dig=$[is_dig+1]
+  # или можно так
+  #is_dig=${lc//[^0-9]/}
+  #а это не катит
+  #is_dig=$[is_dig+1]
+  is_dig=$(echo "$is_dig+1" | bc)
   if (( $is_dig < 10000000 )); then
     send_error "Неверный лицевой счет!" $from
     exit 0
   fi
-# поверка не нулевых показаний, но пройдет если даже только текст в строке
-#  if [ $el == "" ]; then
-# по хорошему проверяем еще и показания на наличие цифр
-# делал по аналогии с лицевым, но..
-# is_dig=`echo "$lc" | grep -o -E '[[:digit:]]+'`
-# is_dig=$[is_dig+1]
-#### это не катит потому что не вкуривает десятичные!!!
-# смотри удаленный фрагмент в trsms_фрагменты
 #########################
   fr=$from
   
-  # отправляем их в функцию параметрами
-  #exch_bd $lc $el $ho $go $fr
-  exch_bd $lc $el $ho $go $from $flnm
-  #
-
+  # отправляем их в функцию параметрами, вместо лажовых значений полетят нули
+  # отправлял так
+  # exch_bd $lc $el $ho $go $from $flnm
+  # получалась лажа в имени файла при передаче более слова в предыдущем параметре. меняю местами
+  exch_bd $from $flnm $lc $el $ho $go 
   # перенес весь процес в функцию
   exit 0
-  #
+  ####################################################################
+  ####################################################################
 
   # зачем два приема когда можно за раз
   # echo -e "От вас поступили показания:\n$lsch;$ele;$hov;$gov" > /var/spool/sms/conv/mes$flnm
