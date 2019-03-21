@@ -8,7 +8,7 @@ source "/home/constantin/sms/functions"
 if [ -z "$1" ]
 then
 	echo "Нет параметра! Имя базы."
-	echo 'И не забудь что будет удаление таблиц!'
+	echo 'И не забудь, что будет удаление записей из таблиц!'
 	exit 0
 fi
 
@@ -19,7 +19,7 @@ mak_gud_xml $1
 connect "TRUNCATE TABLE money;"
 connect "TRUNCATE TABLE person;"
 connect "TRUNCATE TABLE pribori;"
-connect "TRUNCATE TABLE data_indic;"
+#connect "TRUNCATE TABLE data_indic;"
 
 # грузим хмл в базу данных
 fill_base 

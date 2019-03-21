@@ -1,6 +1,5 @@
 #!/bin/bash
 # рабочий вариант скрипта
-# конвертируем смс и отправляем на почтовый ящик
 # и в файл в sent
 # конфигурация в файле /etc/smsd.conf
 # запуск sudo smsd, остановка sudo pkill smsd
@@ -10,7 +9,7 @@
 # и вообще все рабочие вещи скинуть туда
 source "/home/constantin/sms/functions"
 # первая часть процедуры
-# выделяем строики кто, когда, сообщение, преобразуем русский, пишем в файл
+# выделяем строки кто, когда, сообщение, преобразуем русский, пишем в файл
 status="$1"
 #  Может при­ни­мать зна­че­ния «CALL, RECEIVED, USSD, SENT, FAILED, REPORT»
 file="$2"
@@ -21,6 +20,17 @@ flnm=${file: -11}
 el_ok=0
 ho_ok=0
 go_ok=0
+
+### проверим что к чему
+
+#    filenm=$(date '+%y%m%d%H%M%S')
+#    echo -e "проверяем чо каво в параметрах" >/home/constantin/sms/CHEKOUT/$filenm
+#    echo -e "первый параметр" >>/home/constantin/sms/CHEKOUT/$filenm
+#    echo -e "$1" >>/home/constantin/sms/CHEKOUT/$filenm
+#    echo -e "второй параметр" >>/home/constantin/sms/CHEKOUT/$filenm
+#    echo -e "$2" >>/home/constantin/sms/CHEKOUT/$filenm
+
+###
 
 case "$1" in
   RECEIVED)
@@ -59,7 +69,8 @@ case "$1" in
     #is_dig=`echo "$from" | grep -o -E '[[:digit:]]+'`
     #is_dig=$[is_dig+1]
     # можно проще
-    is_dig=${from//[^0-9]/}
+    is_dig=${from// /}
+    is_dig=${is_dig//[^0-9]/}
     if [[ $(echo "${is_dig} < 79000000000" | bc) -eq 1 ]]; then  
       exit 0
     fi
@@ -152,7 +163,6 @@ if ! ( grep -i "^эл:" $trfile > /dev/null || grep -i "^хв:" $trfile > /dev/n
     fi
     ele=0
   fi
-  # надо проверить порядок показаний и чтобы там была не лажа
   # лицевой будет проверен после раскладов, пропускаем
   # остальные показания проверяем по порядку
   # электроэнергия
@@ -163,32 +173,32 @@ if ! ( grep -i "^эл:" $trfile > /dev/null || grep -i "^хв:" $trfile > /dev/n
     # берем значения
     el=`echo "$ele" | cut -d ":" -f 2`
     # убираем пробелы
-    el=`echo ${el// /}`
+    el=${el// /}
     # проверяем есть ли цифры
     #is_dig=`echo "$el" | grep -o -E '[[:digit:]]+'`
     # лучше так
-    el_chk=${el//[^0-9]/}
+    el_chkd=${el//[^0-9]/}
     #is_dig=$[is_dig+1]
-    if (( ${#el_chk} > 0 )); then
+    if (( ${#el_chkd} > 0 )); then
       el_ok=1
     fi
   fi
   # холодная вода
   if ( [ ${#hov}>3 ] && ( echo "$hov" | grep -i "хв:" > /dev/null ) ); then
     ho=`echo "$hov" | cut -d ":" -f 2`
-    ho=`echo ${ho// /}`
+    ho=${ho// /}
     # проверяем показания
-    ho_chk=${ho//[^0-9]/}
-    if (( ${#ho_chk} > 0 )); then
+    ho_chkd=${ho//[^0-9]/}
+    if (( ${#ho_chkd} > 0 )); then
       ho_ok=1
     fi
   fi
   # горячая вода
   if ( [ ${#gov}>3 ] && ( echo "$gov" | grep -i "гв:" > /dev/null ) ); then
     go=`echo "$gov" | cut -d ":" -f 2`
-    go=`echo ${go// /}`
-    go_chk=${go//[^0-9]/}
-    if (( ${#go_chk} > 0 )); then
+    go=${go// /}
+    go_chkd=${go//[^0-9]/}
+    if (( ${#go_chkd} > 0 )); then
       go_ok=1
     fi
   fi
@@ -206,9 +216,9 @@ else
     #el=`echo "$ele" | formail -zx ЭЛ:`
     el=`echo "$ele" | cut -d ":" -f 2`
     # убираем пробелы
-    el=`echo ${el// /}`
-    el_chk=${el//[^0-9]/}
-    if (( ${#el_chk} > 0 )); then
+    el=${el// /}
+    el_chkd=${el//[^0-9]/}
+    if (( ${#el_chkd} > 0 )); then
       el_ok=1
     fi
   fi
@@ -216,9 +226,9 @@ else
     hov=`head $trfile | grep -i "^хв:"`
     #ho=`echo "$hov" | formail -zx ХВ:`
     ho=`echo "$hov" | cut -d ":" -f 2`
-    ho=`echo ${ho// /}`
-    ho_chk=${ho//[^0-9]/}
-    if (( ${#ho_chk} > 0 )); then
+    ho=${ho// /}
+    ho_chkd=${ho//[^0-9]/}
+    if (( ${#ho_chkd} > 0 )); then
       ho_ok=1
     fi
   fi
@@ -226,9 +236,9 @@ else
     gov=`head $trfile | grep -i "^гв:"`
     #go=`echo "$gov" | formail -zx ГВ:`
     go=`echo "$gov" | cut -d ":" -f 2`
-    go=`echo ${go// /}`
-    go_chk=${go//[^0-9]/}
-    if (( ${#go_chk} > 0 )); then
+    go=${go// /}
+    go_chkd=${go//[^0-9]/}
+    if (( ${#go_chkd} > 0 )); then
       go_ok=1
     fi
   fi
@@ -246,15 +256,19 @@ fi
   #lc=`echo "$lsch" | formail -zx ЛС:`
   # оказалось формейл требователен к регистру! поэтому катом   
   lc=`echo "$lsch" | cut -d ":" -f 2`
-  lc=`echo ${lc// /}`
 
   # проверка введенного лицевого, а не черте чо
-  is_dig=`echo "$lc" | grep -o -E '[[:digit:]]+'`
+  lc=${lc// /}
+  lc=${lc//[^0-9]/}
+
+  #is_dig=`echo "$lc" | grep -o -E '[[:digit:]]+'`
   # или можно так
   #is_dig=${lc//[^0-9]/}
   #а это не катит
   #is_dig=$[is_dig+1]
-  is_dig=$(echo "$is_dig+1" | bc)
+  # проверял метку. нафига! преобразовал лицевой в цифры и проверил его
+  # is_dig=$(echo "$is_dig+1" | bc)
+  is_dig=$(echo "$lc+1" | bc)
   if (( $is_dig < 10000000 )); then
     send_error "Неверный лицевой счет!" $from
     exit 0
@@ -295,16 +309,32 @@ fi
   ftp -in -u ftp://j880085_wp3:shE6Wctw58Q@159dz.spectrum.myjino.ru/site/getpu/inSMS/ $flnm
   #ftp -in -u ftp://j880085_wp3:shE6Wctw58Q@159dz.spectrum.myjino.ru/site/getpu/inSMS/ $flnm
     ;;
+  # События при получении ответа на USSD-запрос.
   USSD)
-    # сигнализировать про снижение баланса
-    # скидывать сообщения о балансе в каталог контроля смс о балансе
-    cp /var/spool/sms/incoming/$file /home/constantin/sms/ussd/
-    # или принудительно проверять баланс, например раз в неделю
+    # обработка запроса баланса
+    # извлечь из ответа на запрос сумму баланса (или остатка пакета в зависимотси от запроса и ответа)и с датой занести в бд
+    # можно принудительно проверять баланс, например раз в неделю
     # в секции модема указать регулярную команду     
     # [mobile]
-    # regular_run_cmd = AT+CUSD=1,"*100#",15;
+    # regular_run_cmd = AT+CUSD=1,"*105#",15;
     # regular_run_interval = 604800
-    ;;  
+    # сделаем по другому 
+    # запускаем скрипт каждые 5 минут и смотрим поля zapros_bal, zapros_rass в бд
+    flnm=$(date '+%y%m%d%H%M%S')
+    echo -e "обработка ussd" >/home/constantin/sms/ussd/$flnm
+    echo -e "$2" >>/home/constantin/sms/ussd/$flnm
+    exit 0
+
+    header=`head -13 $file | grep -e "^From: " -e "^Sent: " -e "^Received: "`
+    from=`head -13 $file | grep -e "^From: " | awk '{print $2}'`
+
+    if grep "Alphabet: UCS2" $file > /dev/null ; then
+                message=`tail -n +14 $file | iconv -f UCS-2BE -t UTF-8`
+        else
+                message=`tail -n +14 $file`
+    fi
+    echo -e "$header\n$message\n" > /home/constantin/sms/ussd/ussd_$flnm
+        ;;  
   CALL) 
     # реагируем на звонок
     # пока убрал. см. файл на звонок

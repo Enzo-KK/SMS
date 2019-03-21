@@ -4,11 +4,20 @@
 # getpu.acc_indication
 # поля
 # nom l_chet n_elec elec n_hv1 hv1 n_gv1 gv1 n_hv2 hv2 n_gv2 gv2 n_hv3 hv3 n_gv3 gv3 n_hv4 hv4 n_gv4 gv4 phone email
+##########
+# запросить баланс
+# echo -e 'AT+CUSD=1,"*100#",15\r' >/dev/ttyUSB0
+# что осталось в Вашем пакете услуг, узнавайте в любое время. *155*0# для тарифа и *155*00# для услуги
 ####################################
 ####################################
 # описываем соединение с сервером MySQL, и принимаем первым аргументом нужные команды
 connect () {
+# локальный 
 mysql -D getpu -u sms_acc -p1313 -Bse "$1"
+# удаленный
+# mysql -D 880085_wp3 -u 880085_wp3 -pM9k5fPmm -Bse "$1"
+# этот работает
+# mysql -u 880085_wp3 -pM9k5fPmm -h 159dz.spectrum.myjino.ru -D 880085_wp3 -e "$1"
 }
 ####################################
 ####################################
@@ -44,13 +53,14 @@ mak_gud_xml() {
 fill_base () {
 connect "LOAD XML INFILE '/var/lib/mysql-files/all_ipk.xml' INTO TABLE person ROWS IDENTIFIED BY '<upd>';"
 connect "LOAD XML INFILE '/var/lib/mysql-files/all_ipk.xml' INTO TABLE money ROWS IDENTIFIED BY '<razdel2>';"
-connect "LOAD XML INFILE '/var/lib/mysql-files/all_ipk.xml' INTO TABLE data_indic ROWS IDENTIFIED BY '<string>';"
 connect "LOAD XML INFILE '/var/lib/mysql-files/all_ipk.xml' INTO TABLE pribori ROWS IDENTIFIED BY '<pribor>';"
-
-connect "delete from data_indic where Потребление is NULL;"
+#не используем
+#connect "LOAD XML INFILE '/var/lib/mysql-files/all_ipk.xml' INTO TABLE data_indic ROWS IDENTIFIED BY '<string>';"
+#connect "delete from data_indic where Потребление is NULL;"
 }
 
-####### проверка повторной отправки тех же показаний #######
+####### проверка повторной отправки тех же показаний. первый вариант #######
+# не использую, доработал и использую chk_povtor_new()
 chk_povtor(){
 local lc=$1
 local el=$2
@@ -61,6 +71,7 @@ local gv=$4
 #	echo 'пропуск проверки'
 #else
 	#echo 'сверяю поданные показания на предмет повтора'
+	# срабатывает если все показания повторились, если только одно или два- принимаются все
 	result=$(connect "select lchet, usluga, nomer, pokazania, date, phone 
 	from polucheno  where lchet like '$lc' and usluga like 'Электро%' and pokazania like '$el'");
 	
@@ -87,12 +98,81 @@ local gv=$4
 }
 #############
 
+####### проверка повторной отправки тех же показаний по усиленной программе #######
+## если показания повторяются, ретурн передает код для обнуления данных
+chk_povtor_new(){
+local lc=$1
+local el=$2
+local hv=$3
+local gv=$4
+# метка того что показания повторяются. по умолчанию - нет
+local is_rep_el=0
+local is_rep_hv=0
+local is_rep_gv=0
+
+# провожу контрольные проверки. до проверки на повтор
+echo "проверен повтор: el:$el, hv:$hv, gv:$gv" >>/home/constantin/sms/CHEKOUT/$lc
+
+	#echo 'сверяю поданные показания на предмет повтора'
+	# если переданное значение равно нулю, тоже метим как повтор
+	if [[ $el != 0 ]]; then
+		result=$(connect "select lchet, usluga, nomer, pokazania, date, phone 
+		from polucheno  where lchet like '$lc' and usluga like 'Электро%' and pokazania like '$el'");
+		# проверка результата запроса (длина строки)
+		# lns=${#result}
+		# если результат не пустой- проверяем дальше
+		if ! [[ ${#result}<1 ]]; then
+			#echo 'электро повтор'
+			is_rep_el=1
+		fi
+	else
+		is_rep_el=1
+	fi
+	if [[ $hv != 0 ]]; then
+		result=$(connect "select lchet, usluga, nomer, pokazania, date, phone 
+		from polucheno  where lchet like '$lc' and usluga like 'Холодное%' and pokazania like '$hv'");
+		if ! [[ ${#result}<1 ]]; then
+			#echo 'холодное повтор'
+			is_rep_hv=1
+		fi
+	else
+		is_rep_hv=1
+	fi
+	if [[ $gv != 0 ]]; then
+		result=$(connect "select lchet, usluga, nomer, pokazania, date, phone 
+		from polucheno  where lchet like '$lc' and usluga like 'Горячее%' and pokazania like '$gv'");
+		if ! [[ ${#result}<1 ]]; then
+			#echo 'горячая повтор'
+			is_rep_gv=1
+		fi
+	else
+		is_rep_gv=1
+	fi
+
+	if [[ $is_rep_el == 1 && $is_rep_hv == 1 && $is_rep_gv == 1 ]]; then
+			# если все показания повторились
+			echo 'повтор всех показаний' >>/home/constantin/sms/CHEKOUT/$lc
+			exit 0
+	fi
+# если частично повтор или ноль, отправляем по ним нули, по новым - показания
+# переменная видна в вызывающей функции если не объявлена local
+out_chk=$is_rep_el$is_rep_hv$is_rep_gv
+
+#echo $out 
+#echo "принято лс:$lc эл:$el хв:$hv гв:$gv"
+#out=$el_zer$hv_zer$gv_zer
+return $out_chk
+# считать значение возврата можно в переменной $?
+}
+#############
+
 # основная функция обработки
 # передаются параметрами: $lsch $ele $hov $gov $from
 ########################################################
 ########################################################
 exch_bd(){
 # получаем переданные значения
+# локальными объявляем чтоб их не видно было в вызывающей функции иначе возможен геморр!
 local lc=$3
 local el_new=$4
 local hv_new=$5
@@ -113,14 +193,19 @@ local gvn=""
 # можно проще
 # date_now=$(date +%d.%m.%y)
 # дата в формате смс
-date_now=$(date '+%y-%m-%d %H:%M:%S')
+local date_now=$(date '+%y-%m-%d %H:%M:%S')
 # есть ли лицевой уже в основной базе
-no_in_base=0
-# сначала показания нулевые
-el_chk=0
-ho_chk=0
-go_chk=0
-
+local no_in_base=0
+# сначала метки показаний нулевые (говорят о нулевых показиниях)
+local el_chk=0
+local ho_chk=0
+local go_chk=0
+local max_el
+local max_hv
+local max_gv
+local sum_el
+local sum_hv
+local sum_gv
 
 ##### проверяем на наличие номера счетчика - есть ли звездочка
 if ( echo "$el_new" | grep "*" > /dev/null ); then
@@ -226,6 +311,7 @@ fi
 		#connect "insert into data_indic(НомерЛицевогоСчета, НаименованиеУслуги, Потребление) 
 		#values($lc, 'Горячее водоснабжение (счетчик)', $gv_new)";
 		# просто заполняем начальные показания нулями
+		# по хорошему их тоже надо объявить local
 		el_old=0
 		hv_old=0
 		gv_old=0
@@ -310,20 +396,20 @@ fi
 		#||  $(echo "${gv_new} < ${gv_old}" | bc) -eq 1 ]] 
 		
 		# делаем раздельную проверку показаний
-		if [[ $(echo "${el_new} == 0" | bc) -eq 1 || $(echo "${el_new} < ${el_old}" | bc) -eq 1  ||  $(echo "${el_new} > ${sum_el}" | bc) -eq 1 ]] 
+		if [[ $(echo "${el_new} == 0" | bc) -eq 1 || $(echo "${el_new} <= ${el_old}" | bc) -eq 1  ||  $(echo "${el_new} > ${sum_el}" | bc) -eq 1 ]] 
 		then
 			# электроэнергию не принимаем
 			# echo "нет электроэнергии: $el_new."
 			el_new=0
 			#el_err='ЭЛ'
 		fi
-		if [[ $(echo "${hv_new} == 0" | bc) -eq 1 || $(echo "${hv_new} < ${hv_old}" | bc) -eq 1  ||  $(echo "${hv_new} > ${sum_hv}" | bc) -eq 1 ]] 
+		if [[ $(echo "${hv_new} == 0" | bc) -eq 1 || $(echo "${hv_new} <= ${hv_old}" | bc) -eq 1  ||  $(echo "${hv_new} > ${sum_hv}" | bc) -eq 1 ]] 
 		then
 			# холодную воду не принимаем
 			hv_new=0
 			#hv_err='ХВ'
 		fi
-		if [[ $(echo "${gv_new} == 0" | bc) -eq 1 || $(echo "${gv_new} < ${gv_old}" | bc) -eq 1  ||  $(echo "${gv_new} > ${sum_gv}" | bc) -eq 1 ]] 
+		if [[ $(echo "${gv_new} == 0" | bc) -eq 1 || $(echo "${gv_new} <= ${gv_old}" | bc) -eq 1  ||  $(echo "${gv_new} > ${sum_gv}" | bc) -eq 1 ]] 
 		then
 			# горячую воду не принимаем
 			gv_new=0
@@ -331,9 +417,45 @@ fi
 		fi
 #			send_error "Отправлены неверные данные!\nПоказания меньше поданных вами ранее!" $fr
 
-		## посмотрим не одни и те же показания шлет чел
-		chk_povtor $lc $el_new $hv_new $gv_new
-		# если повтор - завершение скрипта в функции
+		## посмотрим не одни и те же показания шлет чел ######
+		chk_povtor_new $lc $el_new $hv_new $gv_new
+		# если повтор всех - завершение скрипта в функции
+		# если частично, принимаем код возврата и расшифровываем
+		# повторяющимся значениям присваиваем ноль, чтобы не принимались
+		#echo "ret_stat:$?"
+		# chk_zer=$?
+
+#		case "$chk_zer" in 
+		# переменная из вызываемой функции видна здесь!
+		case "$out_chk" in 
+  		100)
+  			el_new=0
+		;;
+  		110)
+  			el_new=0
+  			hv_new=0
+		;;
+  		101)
+  			el_new=0
+			  gv_new=0
+		;;
+  		011)
+  			hv_new=0
+  			gv_new=0
+		;;
+  		010)
+  			hv_new=0
+		;;
+  		001)
+  			gv_new=0
+		;;
+  		*)
+  			# оставляем без изменений
+  			echo 'нифига'
+		;;
+		esac
+		
+		echo "на выходе проверки повторов: out_chk:$out_chk, el:$el_new, hv:$hv_new, gv:$gv_new" >>/home/constantin/sms/CHEKOUT/$lc
 		##########
 
 #### перенес из основного скрипта сюда
@@ -356,7 +478,7 @@ fi
 		fi
 		if ! [[ $(echo "${gv_new} == 0" | bc) -eq 1 ]]; then
 			str_out_sms="$str_out_smsГВ:$gv_new"
-			str_out="$str_outТип прибора:ГВС;Серийный номер:$gvn;Показания:$gv_new;"
+			str_out="$str_outТип прибора:ГВС;Серийный номер:$gvn;Показания:$gv_new"
 			go_chk=1
 		else
 			no_in="$no_inГВ"
@@ -411,11 +533,15 @@ fi
   		########
   		
   		#формируем файл для фтп
+  		# по просьбе заказчика меняем имя файла
+  		fn_ftp=$(date '+%y%m%d%H%M%S')
+		fn_ftp=20$fn_ftp.txt
+
   		message="$str_out;Контактный телефон:+$fr;;"
-  		echo "$message" > /home/constantin/sms/tomail/$fn
+  		echo "$message" > /home/constantin/sms/tomail/$fn_ftp
   		rm /var/spool/sms/conv/mes$fn
 		# разрешаем всем читать смс
-  		chmod a+r /home/constantin/sms/tomail/$fn
+  		chmod a+r /home/constantin/sms/tomail/$fn_ftp
   		
   		# и здесь отправка дубля показаний на эл.почту, пока отключил
   		# отправка на почту почему то не работает 
@@ -433,7 +559,12 @@ fi
 
     	# на фтп не вкуриваются пути, только имя файла
   		cd /home/constantin/sms/tomail
-  		ftp -in -u ftp://j880085_wp3:shE6Wctw58Q@159dz.spectrum.myjino.ru/site/getpu/inSMS/ $fn
+  		# по пожеланию трудящихся
+  		# переименовываем файл по шаблону ггггммддччммсс.txt
+  		# fn_ftp=$(date '+%y%m%d%H%M%S')
+  		# rn $fn $fn_ftp
+
+  		ftp -in -u ftp://j880085_wp3:shE6Wctw58Q@159dz.spectrum.myjino.ru/site/getpu/inSMS/ $fn_ftp
 #######
 		
 		# заменяем имеющиеся данные
@@ -467,10 +598,25 @@ fi
 		#if [[ 1 ]]; then
 
 	echo 'Добавляю запись в получено'
+
+		### контрольная запись показаний
+		echo "перед доб. зап.: date_now:$date_now, from:$fr, lc:$lc" >>/home/constantin/sms/CHEKOUT/$fr
+		echo "eln:$eln, el_new:$el_new, el_chk:$el_chk, max_el:$sum_el" >>/home/constantin/sms/CHEKOUT/$fr
+		echo "hvn:$hvn, hv_new:$hv_new, ho_chk:$ho_chk, max_hv:$sum_hv" >>/home/constantin/sms/CHEKOUT/$fr
+		echo "gvn:$gvn, gv_new:$gv_new, go_chk:$go_chk, max_gv:$sum_gv" >>/home/constantin/sms/CHEKOUT/$fr
+		###
+
 			# добавляем запись или
-			connect "insert into polucheno(lchet, usluga, nomer, pokazania, date, phone) values($lc, 'Электроэнергия', $eln, $el_new, '$date_now', $fr);"
-			connect "insert into polucheno(lchet, usluga, nomer, pokazania, date, phone) values($lc, 'Холодное водоснабжение', $hvn, $hv_new, '$date_now', $fr);"
-			connect "insert into polucheno(lchet, usluga, nomer, pokazania, date, phone) values($lc, 'Горячее водоснабжение', $gvn, $gv_new, '$date_now', $fr);"
+			# только если в показаниях не ноль
+			if [[ $el_chk != 0 ]]; then
+				connect "insert into polucheno(lchet, usluga, nomer, pokazania, date, phone) values($lc, 'Электроэнергия', $eln, $el_new, '$date_now', $fr)";
+			fi
+			if [[ $ho_chk != 0 ]]; then
+				connect "insert into polucheno(lchet, usluga, nomer, pokazania, date, phone) values($lc, 'Холодное водоснабжение', $hvn, $hv_new, '$date_now', $fr)";
+			fi
+			if [[ $go_chk != 0 ]]; then
+				connect "insert into polucheno(lchet, usluga, nomer, pokazania, date, phone) values($lc, 'Горячее водоснабжение', $gvn, $gv_new, '$date_now', $fr)";
+			fi
 		#else
 			# пишем обновленые показания в отдельну базу
 			# 
@@ -576,4 +722,10 @@ local go=$4
 # с телефоном не определился.. отслеживать или нет соответствие
 local fr=$5
 echo "data: $lc $el $ho $go $fr" 
+}
+
+# отправка команты напрямую в модем
+Chck_bal () {
+	# запрос баланса
+	echo -e 'AT+CUSD=1,"*100#",15\r' >/dev/ttyUSB0
 }
